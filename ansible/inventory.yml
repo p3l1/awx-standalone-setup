@@ -1,0 +1,6 @@
+---
+all:
+  hosts:
+    lima-kube:
+      ansible_ssh_extra_args: "-F {{ lookup('ansible.builtin.env', 'HOME') }}/.lima/kube/ssh.config"
+      ansible_hostname: lima-kube

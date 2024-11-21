@@ -1,0 +1,4 @@
+{
+    "ansible.python.interpreterPath": ".venv/bin/python3",
+    "ansible.validation.lint.path": ".venv/bin/ansible-lint"
+}

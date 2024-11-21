@@ -1,0 +1,69 @@
+---
+- name: Setup Ansible AWX
+  hosts: all
+  become: true
+
+  vars:
+    metallb_ip_range: 192.168.5.16-192.168.5.20
+
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+  tasks:
+    - name: Install python3-kubernetes
+      ansible.builtin.apt:
+        name: python3-kubernetes
+        update_cache: true
+        state: present
+
+    - name: Install k3s as single node cluster
+      ansible.builtin.shell:
+        executable: /bin/bash
+        creates: /usr/local/bin/k3s
+        cmd: |
+          set -o pipefail
+          curl -sfL https://get.k3s.io | sh -
+      changed_when: false
+
+    - name: Download Helm installation script
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get_helm.sh
+        mode: '0700'
+
+    - name: Run Helm installation script
+      ansible.builtin.command: /tmp/get_helm.sh
+      args:
+        creates: /usr/local/bin/helm  # Prevents re-execution if Helm is already installed
+
+    - name: Add MetalLB Helm repo
+      kubernetes.core.helm_repository:
+        name: metallb
+        repo_url: https://metallb.github.io/metallb
+
+    - name: Install MetalLB
+      kubernetes.core.helm:
+        release_state: present
+        release_name: metallb
+        release_namespace: metallb-system
+        release_values: "{{ lookup('ansible.builtin.template', '../templates/manifests/metallb/values.yml.j2') | from_yaml }}"
+        create_namespace: true
+        chart_ref: metallb/metallb
+        chart_version: v0.14.5
+        wait: true
+
+    - name: Configure MetalLB IP pool
+      kubernetes.core.k8s:
+        state: present
+        template:
+          path: '../templates/manifests/metallb/pool.yml.j2'
+          variable_start_string: '[['
+          variable_end_string: ']]'
+
+    - name: Configure MetalLB IP pool advertisement
+      kubernetes.core.k8s:
+        state: present
+        template:
+          path: '../templates/manifests/metallb/advertisement.yml.j2'
+          variable_start_string: '[['
+          variable_end_string: ']]'
