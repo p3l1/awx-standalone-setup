@@ -5,6 +5,12 @@
 
   vars:
     metallb_ip_range: 192.168.5.16-192.168.5.20
+    awx_domain: awx.example.org
+    # acme_directory: https://acme-v02.api.letsencrypt.org/directory  # Let's Encrypt Production
+    acme_directory: https://acme-staging-v02.api.letsencrypt.org/directory  # Let's Encrypt Staging
+    acme_email: "foo@example.org"
+    acme_acme_dns_server: https://auth.acme-dns.io
+    acme_acme_dns_credentials_file: "/root/acmedns.json"
 
   environment:
     KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -84,5 +90,62 @@
         chart_version: v1.16.2
         wait: true
 
-# TODO: Create ClusterIssuer with acme-dns configuration for solving dns-01 challenge
-# https://cert-manager.io/docs/configuration/acme/dns01/acme-dns/
+    - name: Handle acme-dns account registration
+      tags: acme-dns
+      block:
+        - name: Check if acme-dns credentials are present
+          ansible.builtin.stat:
+            path: "{{ acme_acme_dns_credentials_file }}"
+          register: acme_acme_dns_credentials_file_status
+
+        - name: Register acme-dns account
+          ansible.builtin.uri:
+            url: "{{ acme_acme_dns_server }}/register"
+            method: POST
+            body: {}
+            headers:
+              Content-Type: "application/json"
+            return_content: true
+            status_code:
+              - 201
+          register: acme_acme_dns_response
+          when: not acme_acme_dns_credentials_file_status.stat.exists
+
+        - name: Save acme-dns credentials to file
+          ansible.builtin.copy:
+            content: "{{ acme_acme_dns_response.json | to_yaml }}"
+            dest: "{{ acme_acme_dns_credentials_file }}"
+            owner: root
+            group: root
+            mode: "0750"
+          when: not acme_acme_dns_credentials_file_status.stat.exists
+
+        - name: Load acme-dns credentials from file
+          ansible.builtin.slurp:
+            src: "{{ acme_acme_dns_credentials_file }}"
+          register: acme_acme_dns_credentials
+
+    - name: Handle cert-manager configuration
+      tags: acme-dns
+      block:
+        - name: Set cert-manager acme-dns secret fact
+          ansible.builtin.set_fact:
+            acmedns_json: "{{ {awx_domain: acmedns_json_content} | to_nice_json }}"
+          vars:
+            acmedns_json_content: "{{ acme_acme_dns_credentials['content'] | b64decode | from_yaml }}"
+
+        - name: Create cert-manager acme-dns secret
+          kubernetes.core.k8s:
+            state: present
+            template:
+              path: '../templates/manifests/cert-manager/issuer_secret.yml.j2'
+              variable_start_string: '[['
+              variable_end_string: ']]'
+
+        - name: Create cert-manager ClusterIssuer
+          kubernetes.core.k8s:
+            state: present
+            template:
+              path: '../templates/manifests/cert-manager/issuer.yml.j2'
+              variable_start_string: '[['
+              variable_end_string: ']]'
